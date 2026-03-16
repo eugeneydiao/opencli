@@ -10,46 +10,20 @@ import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import {
   type DoctorReport,
+  PLAYWRIGHT_TOKEN_ENV,
   discoverExtensionToken,
+  fileExists,
   getDefaultShellRcPath,
   runBrowserDoctor,
+  shortenPath,
+  toolName,
   upsertJsonConfigToken,
   upsertShellToken,
   upsertTomlConfigToken,
+  writeFileWithMkdir,
 } from './doctor.js';
 import { getTokenFingerprint } from './browser.js';
 import { type CheckboxItem, checkboxPrompt } from './tui.js';
-
-const PLAYWRIGHT_TOKEN_ENV = 'PLAYWRIGHT_MCP_EXTENSION_TOKEN';
-
-function fileExists(p: string): boolean {
-  try { return fs.statSync(p).isFile() || fs.statSync(p).isDirectory(); } catch { return false; }
-}
-
-function writeFileWithMkdir(filePath: string, content: string) {
-  const dir = filePath.substring(0, filePath.lastIndexOf('/'));
-  if (dir && !fileExists(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(filePath, content, 'utf-8');
-}
-
-function shortenPath(p: string): string {
-  const home = process.env.HOME || process.env.USERPROFILE || '';
-  return home && p.startsWith(home) ? '~' + p.slice(home.length) : p;
-}
-
-function toolName(p: string): string {
-  if (p.includes('.codex/')) return 'Codex';
-  if (p.includes('.cursor/')) return 'Cursor';
-  if (p.includes('.claude.json')) return 'Claude Code';
-  if (p.includes('antigravity')) return 'Antigravity';
-  if (p.includes('.gemini/settings')) return 'Gemini CLI';
-  if (p.includes('opencode')) return 'OpenCode';
-  if (p.includes('Claude/claude_desktop')) return 'Claude Desktop';
-  if (p.includes('.vscode/')) return 'VS Code';
-  if (p.includes('.mcp.json')) return 'Project MCP';
-  if (p.includes('.zshrc') || p.includes('.bashrc') || p.includes('.profile')) return 'Shell';
-  return '';
-}
 
 export async function runSetup(opts: { cliVersion?: string; token?: string } = {}) {
   console.log();
@@ -113,8 +87,9 @@ export async function runSetup(opts: { cliVersion?: string; token?: string } = {
   const shellStatus = report.shellFiles[0];
   const shellFp = shellStatus?.fingerprint;
   const shellOk = shellFp === fingerprint;
+  const shellTool = toolName(shellPath) || 'Shell';
   items.push({
-    label: padRight(`${shortenPath(shellPath)}`, 50) + chalk.dim(` [${toolName(shellPath) || 'Shell'}]`),
+    label: padRight(shortenPath(shellPath), 50) + chalk.dim(` [${shellTool}]`),
     value: `shell:${shellPath}`,
     checked: !shellOk,
     status: shellOk ? `configured (${shellFp})` : shellFp ? `mismatch (${shellFp})` : 'missing',
@@ -127,7 +102,7 @@ export async function runSetup(opts: { cliVersion?: string; token?: string } = {
     const ok = fp === fingerprint;
     const tool = toolName(config.path);
     items.push({
-      label: padRight(`${shortenPath(config.path)}`, 50) + chalk.dim(tool ? ` [${tool}]` : ''),
+      label: padRight(shortenPath(config.path), 50) + chalk.dim(tool ? ` [${tool}]` : ''),
       value: `config:${config.path}`,
       checked: !ok,
       status: ok ? `configured (${fp})` : !config.exists ? 'will create' : fp ? `mismatch (${fp})` : 'missing',
@@ -147,22 +122,24 @@ export async function runSetup(opts: { cliVersion?: string; token?: string } = {
 
   // Step 5: Apply changes
   const written: string[] = [];
+  let wroteShell = false;
 
   for (const sel of selected) {
     if (sel.startsWith('shell:')) {
-      const path = sel.slice('shell:'.length);
-      const before = fileExists(path) ? fs.readFileSync(path, 'utf-8') : '';
-      writeFileWithMkdir(path, upsertShellToken(before, token));
-      written.push(path);
+      const p = sel.slice('shell:'.length);
+      const before = fileExists(p) ? fs.readFileSync(p, 'utf-8') : '';
+      writeFileWithMkdir(p, upsertShellToken(before, token));
+      written.push(p);
+      wroteShell = true;
     } else if (sel.startsWith('config:')) {
-      const path = sel.slice('config:'.length);
-      const config = report.configs.find(c => c.path === path);
+      const p = sel.slice('config:'.length);
+      const config = report.configs.find(c => c.path === p);
       if (config && config.parseError) continue;
-      const before = fileExists(path) ? fs.readFileSync(path, 'utf-8') : '';
-      const format = config?.format ?? (path.endsWith('.toml') ? 'toml' : 'json');
+      const before = fileExists(p) ? fs.readFileSync(p, 'utf-8') : '';
+      const format = config?.format ?? (p.endsWith('.toml') ? 'toml' : 'json');
       const next = format === 'toml' ? upsertTomlConfigToken(before, token) : upsertJsonConfigToken(before, token);
-      writeFileWithMkdir(path, next);
-      written.push(path);
+      writeFileWithMkdir(p, next);
+      written.push(p);
     }
   }
 
@@ -172,7 +149,12 @@ export async function runSetup(opts: { cliVersion?: string; token?: string } = {
   if (written.length > 0) {
     console.log(chalk.green.bold(`  ✓ Updated ${written.length} file(s):`));
     for (const p of written) {
-      console.log(`    ${chalk.dim('•')} ${shortenPath(p)}`);
+      const tool = toolName(p);
+      console.log(`    ${chalk.dim('•')} ${shortenPath(p)}${tool ? chalk.dim(` [${tool}]`) : ''}`);
+    }
+    if (wroteShell) {
+      console.log();
+      console.log(chalk.cyan(`  💡 Run ${chalk.bold(`source ${shortenPath(shellPath)}`)} to apply token to current shell.`));
     }
   } else {
     console.log(chalk.yellow('  No files were changed.'));
@@ -181,7 +163,6 @@ export async function runSetup(opts: { cliVersion?: string; token?: string } = {
 }
 
 function padRight(s: string, n: number): string {
-  // Account for ANSI escape codes in length calculation
   const visible = s.replace(/\x1b\[[0-9;]*m/g, '');
   return visible.length >= n ? s : s + ' '.repeat(n - visible.length);
 }

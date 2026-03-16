@@ -76,28 +76,28 @@ export async function checkboxPrompt(
     const wasRaw = stdin.isRaw;
     stdin.setRawMode(true);
     stdin.resume();
+    stdout.write('\x1b[?25l'); // Hide cursor
 
-    let rendered = '';
+    let firstDraw = true;
 
     function draw() {
-      // Clear previous render
-      if (rendered) {
-        const lines = rendered.split('\n').length;
+      // Clear previous render (skip on first draw)
+      if (!firstDraw) {
+        const lines = render().split('\n').length;
         stdout.write(`\x1b[${lines}A\x1b[J`);
       }
-      rendered = render();
-      stdout.write(rendered);
+      firstDraw = false;
+      stdout.write(render());
     }
 
     function cleanup() {
       stdin.setRawMode(wasRaw ?? false);
       stdin.pause();
       stdin.removeListener('data', onData);
-      // Clear the TUI
-      if (rendered) {
-        const lines = rendered.split('\n').length;
-        stdout.write(`\x1b[${lines}A\x1b[J`);
-      }
+      // Clear the TUI and restore cursor
+      const lines = render().split('\n').length;
+      stdout.write(`\x1b[${lines}A\x1b[J`);
+      stdout.write('\x1b[?25h'); // Show cursor
     }
 
     function onData(data: Buffer) {
@@ -150,12 +150,18 @@ export async function checkboxPrompt(
         return;
       }
 
-      // q / Esc / Ctrl+C — cancel
-      if (key === 'q' || key === '\x1b' || key === '\x03') {
+      // q / Esc — cancel
+      if (key === 'q' || key === '\x1b') {
         cleanup();
         stdout.write(`  ${chalk.yellow('✗')} ${chalk.dim('Cancelled')}\n\n`);
         resolve([]);
         return;
+      }
+
+      // Ctrl+C — exit process
+      if (key === '\x03') {
+        cleanup();
+        process.exit(130);
       }
     }
 

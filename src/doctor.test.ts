@@ -86,8 +86,10 @@ describe('json token helpers', () => {
 });
 
 describe('doctor report rendering', () => {
+  const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
   it('renders OK-style report when tokens match', () => {
-    const text = renderBrowserDoctorReport({
+    const text = strip(renderBrowserDoctorReport({
       envToken: 'abc123',
       envFingerprint: 'fp1',
       extensionToken: 'abc123',
@@ -98,14 +100,15 @@ describe('doctor report rendering', () => {
       recommendedFingerprint: 'fp1',
       warnings: [],
       issues: [],
-    });
+    }));
 
     expect(text).toContain('[OK] Environment token: configured (fp1)');
-    expect(text).toContain('[OK] MCP config /tmp/mcp.json: configured (fp1)');
+    expect(text).toContain('[OK] /tmp/mcp.json');
+    expect(text).toContain('configured (fp1)');
   });
 
   it('renders MISMATCH-style report when fingerprints differ', () => {
-    const text = renderBrowserDoctorReport({
+    const text = strip(renderBrowserDoctorReport({
       envToken: 'abc123',
       envFingerprint: 'fp1',
       extensionToken: null,
@@ -116,10 +119,12 @@ describe('doctor report rendering', () => {
       recommendedFingerprint: 'fp1',
       warnings: [],
       issues: ['Detected inconsistent Playwright MCP tokens across env/config files.'],
-    });
+    }));
 
     expect(text).toContain('[MISMATCH] Environment token: configured (fp1)');
-    expect(text).toContain('[MISMATCH] Shell file /tmp/.zshrc: configured (fp2)');
+    expect(text).toContain('[MISMATCH] /tmp/.zshrc');
+    expect(text).toContain('configured (fp2)');
     expect(text).toContain('[MISMATCH] Recommended token fingerprint: fp1');
   });
 });
+
